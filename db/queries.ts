@@ -10,7 +10,7 @@ import {
   lessons,
   units,
   userProgress,
-  userSubscription,
+  userSubscription
 } from "./schema";
 
 const DAY_IN_MS = 86_400_000;
@@ -166,6 +166,7 @@ export const getLesson = cache(async (id?: number) => {
           challengeProgress: {
             where: eq(challengeProgress.userId, userId),
           },
+          matchingPairs: true,
         },
       },
     },

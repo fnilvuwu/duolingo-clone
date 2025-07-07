@@ -40,7 +40,7 @@ export const siteConfig: Metadata = {
     "css",
   ] as Array<string>,
   authors: {
-    name: "Sanidhya Kumar Verma",
+    name: "Galaxy Developer",
     url: "https://github.com/sanidhyy",
   },
 } as const;

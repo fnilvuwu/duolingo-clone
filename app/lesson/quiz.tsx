@@ -5,13 +5,13 @@ import { useState, useTransition } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Confetti from "react-confetti";
-import { useAudio, useWindowSize, useMount } from "react-use";
+import { useAudio, useMount, useWindowSize } from "react-use";
 import { toast } from "sonner";
 
 import { upsertChallengeProgress } from "@/actions/challenge-progress";
 import { reduceHearts } from "@/actions/user-progress";
 import { MAX_HEARTS } from "@/constants";
-import { challengeOptions, challenges, userSubscription } from "@/db/schema";
+import { challengeOptions, challenges, matchingPairs, userSubscription } from "@/db/schema";
 import { useHeartsModal } from "@/store/use-hearts-modal";
 import { usePracticeModal } from "@/store/use-practice-modal";
 
@@ -28,12 +28,13 @@ type QuizProps = {
   initialLessonChallenges: (typeof challenges.$inferSelect & {
     completed: boolean;
     challengeOptions: (typeof challengeOptions.$inferSelect)[];
+    matchingPairs: (typeof matchingPairs.$inferSelect)[];
   })[];
   userSubscription:
-    | (typeof userSubscription.$inferSelect & {
-        isActive: boolean;
-      })
-    | null;
+  | (typeof userSubscription.$inferSelect & {
+    isActive: boolean;
+  })
+  | null;
 };
 
 export const Quiz = ({
@@ -80,12 +81,19 @@ export const Quiz = ({
 
   const [selectedOption, setSelectedOption] = useState<number>();
   const [status, setStatus] = useState<"none" | "wrong" | "correct">("none");
+  const [selectedPairs, setSelectedPairs] = useState<{ batakId: number; indonesiaId: number }[]>([]);
+  const [arrangedOrder, setArrangedOrder] = useState<number[]>([]);
 
   const challenge = challenges[activeIndex];
   const options = challenge?.challengeOptions ?? [];
 
   const onNext = () => {
     setActiveIndex((current) => current + 1);
+    // Reset all state for next challenge
+    setSelectedOption(undefined);
+    setStatus("none");
+    setSelectedPairs([]);
+    setArrangedOrder([]);
   };
 
   const onSelect = (id: number) => {
@@ -94,7 +102,106 @@ export const Quiz = ({
     setSelectedOption(id);
   };
 
+  const onPairSelect = (batakId: number, indonesiaId: number) => {
+    if (status !== "none") return;
+
+    setSelectedPairs((prev) => {
+      const existingPairIndex = prev.findIndex(
+        (pair) => pair.batakId === batakId || pair.indonesiaId === indonesiaId
+      );
+
+      if (existingPairIndex >= 0) {
+        // Remove existing pair
+        return prev.filter((_, index) => index !== existingPairIndex);
+      } else {
+        // Add new pair
+        return [...prev, { batakId, indonesiaId }];
+      }
+    });
+  };
+
+  const onArrange = (optionId: number, position: number) => {
+    if (status !== "none") return;
+
+    setArrangedOrder((prev) => {
+      if (position === -1) {
+        // Remove from arranged order
+        return prev.filter(id => id !== optionId);
+      } else {
+        // Add to arranged order at specified position
+        const newOrder = [...prev];
+        newOrder.splice(position, 0, optionId);
+        return newOrder;
+      }
+    });
+  };
+
   const onContinue = () => {
+    // For VOCAB_INTRO, just move to next challenge
+    if (challenge.type === "VOCAB_INTRO") {
+      onNext();
+      return;
+    }
+
+    // For MATCHING, check if pairs are correct
+    if (challenge.type === "MATCHING") {
+      if (status === "correct") {
+        onNext();
+        return;
+      }
+
+      // TODO: Add matching validation logic
+      startTransition(() => {
+        upsertChallengeProgress(challenge.id)
+          .then((response) => {
+            if (response?.error === "hearts") {
+              openHeartsModal();
+              return;
+            }
+
+            void correctControls.play();
+            setStatus("correct");
+            setPercentage((prev) => prev + 100 / challenges.length);
+
+            if (initialPercentage === 100) {
+              setHearts((prev) => Math.min(prev + 1, MAX_HEARTS));
+            }
+          })
+          .catch(() => toast.error("Something went wrong. Please try again."));
+      });
+      return;
+    }
+
+    // For ARRANGE, check if order is correct
+    if (challenge.type === "ARRANGE") {
+      if (status === "correct") {
+        onNext();
+        return;
+      }
+
+      // TODO: Add arrange validation logic
+      startTransition(() => {
+        upsertChallengeProgress(challenge.id)
+          .then((response) => {
+            if (response?.error === "hearts") {
+              openHeartsModal();
+              return;
+            }
+
+            void correctControls.play();
+            setStatus("correct");
+            setPercentage((prev) => prev + 100 / challenges.length);
+
+            if (initialPercentage === 100) {
+              setHearts((prev) => Math.min(prev + 1, MAX_HEARTS));
+            }
+          })
+          .catch(() => toast.error("Something went wrong. Please try again."));
+      });
+      return;
+    }
+
+    // For other types (SELECT, ASSIST, FILL_BLANK), require selection
     if (!selectedOption) return;
 
     if (status === "wrong") {
@@ -105,8 +212,6 @@ export const Quiz = ({
 
     if (status === "correct") {
       onNext();
-      setStatus("none");
-      setSelectedOption(undefined);
       return;
     }
 
@@ -237,6 +342,12 @@ export const Quiz = ({
                 selectedOption={selectedOption}
                 disabled={pending}
                 type={challenge.type}
+                question={challenge.question}
+                matchingPairs={challenge.matchingPairs}
+                selectedPairs={selectedPairs}
+                onPairSelect={onPairSelect}
+                arrangedOrder={arrangedOrder}
+                onArrange={onArrange}
               />
             </div>
           </div>
@@ -244,7 +355,13 @@ export const Quiz = ({
       </div>
 
       <Footer
-        disabled={pending || !selectedOption}
+        disabled={
+          pending ||
+          (challenge.type === "VOCAB_INTRO" ? false :
+            challenge.type === "MATCHING" ? selectedPairs.length === 0 :
+              challenge.type === "ARRANGE" ? arrangedOrder.length === 0 :
+                !selectedOption)
+        }
         status={status}
         onCheck={onContinue}
       />
